@@ -4,25 +4,52 @@
 
 { config, pkgs, lib, ... }:
 
-let
-  sources = import ./lon/lon.nix;
-  lanzaboote = import sources.lanzaboote {
-    inherit pkgs;
-  };
-in
+  #=========================================================
+  #     Lanzaboote: Secure Boot za NixOS
+  #=========================================================
+  let
+    sources = import ./lon/lon.nix;
+    lanzaboote = import sources.lanzaboote {
+      inherit pkgs;
+    };
+  in
 
 {
-  imports = [ 
-    # Include the results of the hardware scan.
-    ./hardware-configuration.nix
-    lanzaboote.nixosModules.lanzaboote  
-  ];
+    imports = [ 
+      # Include the results of the hardware scan.
+      ./hardware-configuration.nix
+      lanzaboote.nixosModules.lanzaboote  
+    ];
 
-  # Use latest kernel.
+  #=========================================================
+  #     Bootloader
+  #=========================================================
+  #boot.loader.systemd-boot.enable = true;
+  #boot.loader.efi.canTouchEfiVariables = true;
+  boot.loader.systemd-boot = {
+  enable = lib.mkForce false;
+  configurationLimit = 3;
+  };
+  boot.lanzaboote = {
+    enable = true;
+    pkiBundle = "/var/lib/sbctl";
+  };
+
+  ########## Enable plymouth (boot animacija) ##########
+  boot.plymouth.enable = true;
+
+  #=========================================================
+  #     Izbor kernela
+  #=========================================================
+  #boot.kernelPackages = pkgs.linuxPackages;
   boot.kernelPackages = pkgs.linuxPackages_latest;
+  #boot.kernelPackages = pkgs.linuxPackages_zen;
+  #boot.kernelPackages = pkgs.linuxPackages_lqx;
+  #boot.kernelPackages = pkgs.linuxPackages_xanmod;
 
-
-  # Ne treba šifra za sudo za ovaj profil:
+  #=========================================================
+  #     Ne treba šifra za sudo za ovaj profil:
+  #=========================================================
     security.sudo.extraRules = [
     {
       users = [ "borko" ];
@@ -35,18 +62,23 @@ in
     }
   ];
 
-  # Automatsko ažuriranje sistema #######################################################
-  system.autoUpgrade.enable = false; # isključeno jer ćemo ručno pokretati kroz terminal
-  nix.settings.auto-optimise-store = true;
+  #=========================================================
+  #     Automatsko ažuriranje sistema
+  #=========================================================
 
-  # Garbage collection (jednom dnevno, centralno)
+  ########## Optimizacija Nix skladišta ##########
+  # Detektuje duplikate fajlova i zamijeni ih čvrstim linkovima (hard links) na jednu kopiju.
+  # Uključiti ako ima malo prostora na disku - štedi prostor, ali su sporije nix store operacije.
+  nix.settings.auto-optimise-store = false;
+
+  ########## Garbage collection ##########
   nix.gc = {
     automatic = true;
     dates = "daily";
     options = "--delete-older-than 2d";
   };
 
-  # Definišite servis
+  ########## Servis za automatsko ažuriranje ##########
   systemd.user.services.nixos-upgrade = {
     enable = true;
     description = "NixOS Upgrade";
@@ -72,26 +104,31 @@ in
       "echo \"║             ✓ AŽURIRANJE ZAVRŠENO!               ║\"; " +
       "echo \"╚══════════════════════════════════════════════════╝\"; " +
       "echo \"\"; " +
-      "echo \"Prozor će se zatvoriti za 5 sekundi...\"; " +
-      "sleep 5" +
+      "echo \"Prozor će se zatvoriti za 3 sekunde...\"; " +
+      "sleep 3" +
       "'";
       User = "borko";
       WorkingDirectory = "/home/borko";
     };
   };
 
-  # Definišite timer
+  ########## Timer za početak ažuriranja ##########
   systemd.user.timers.nixos-upgrade = {
     enable = true;
     wantedBy = [ "timers.target" ];
     timerConfig = {
-      OnCalendar = "*-*-* 10:00:00"; # Svaki dan u 10:00 (bolje od "daily")
-      Persistent = true; # Ako propustite, pokrene pri sledećem bootu
-      RandomizedDelaySec = "10min"; # Random delay 0-10 minuta
+      #OnCalendar = "*-*-* 12:15:00";
+      OnBootSec = "1min";  # Čekaj 2 minuta nakon boot-a
+      #OnCalendar = "daily"; # Na dnevnom nivou
+      #Persistent = true; # Preskočeni pokreti će se izvršiti pri sledećem bootu
+      #RandomizedDelaySec = "1h"; # Maksimalno kašnjenje (random) npr. 30min, 1h..
+      #FixedRandomDelay = true; # Kašnjenje se randomizuje samo jednom
     };
   };
 
-  # Finalne Kernel Postavke za 16GB RAM: #########################################
+  #========================================================= 
+  #     Finalne Kernel Postavke za 16GB RAM:
+  #=========================================================
 
   boot.kernel.sysctl = {
     # 1. AGRESIVNA RAM OPTIMIZACIJA (16GB omogućava)
@@ -133,7 +170,7 @@ in
     "vm.compact_memory" = 1;
   };
 
-  # Kernel parametri
+  ########### Kernel parametri ##########
   boot.kernelParams = [
     "amd_pstate=active"
     "processor.max_cstate=2"        # Shallower C-states za editing
@@ -142,9 +179,11 @@ in
     "mce=ignore_ce"                 # Ignore correctable errors
   ];
 
-  # RAM Disk Setup za Proxy/Cache: #########################################
+  #=========================================================
+  #     RAM Disk Setup za Proxy/Cache:
+  #=========================================================
 
-  # 8GB RAM Disk za Kdenlive cache (ostaje 8GB za sistem)
+  ###### 8GB RAM Disk za Kdenlive cache (ostaje 8GB za sistem) #####
   fileSystems."/mnt/ramdisk" = {
     device = "none";
     fsType = "tmpfs";
@@ -158,13 +197,13 @@ in
     ];
   };
 
-  # Link Kdenlive cache na RAM disk
+  ###### Link Kdenlive cache na RAM disk ######
   systemd.tmpfiles.rules = [
     "L /home/borko/.local/share/kdenlive/cache - - - - /mnt/ramdisk/kdenlive_cache"
     "L /tmp/kdenlive - - - - /mnt/ramdisk/kdenlive_temp"
   ];
 
-  # AMD Ryzen 2500U Specific Optimizations: #######################################
+  ###### AMD Ryzen 2500U Specific Optimizations: ######
   environment.variables = {
     # Video editing optimizacije
     MLT_NORMALISATION_CLAMP = "1";
@@ -180,8 +219,9 @@ in
     ACO_DEBUG = "novskipov";
   };
 
-  # Power & Thermal Management daemons ###############################################
-
+  #=========================================================
+  #     Power & Thermal Management daemons
+  #=========================================================
   services.power-profiles-daemon.enable = false;
 
   #services.thermald.enable = false;
@@ -202,28 +242,11 @@ in
   services.tuned.enable = true;
   services.tuned.settings.dynamic_tuning = true;
 
-  #####################################################################
-
   # Virt-manager
   programs.virt-manager.enable = true;
   users.groups.libvirtd.members = ["borko"];
   virtualisation.libvirtd.enable = true;
   virtualisation.spiceUSBRedirection.enable = true;
-
-  # Bootloader.
-  #boot.loader.systemd-boot.enable = true;
-  #boot.loader.efi.canTouchEfiVariables = true;
-  boot.loader.systemd-boot = {
-  enable = lib.mkForce false;
-  configurationLimit = 3;
-  };
-  boot.lanzaboote = {
-    enable = true;
-    pkiBundle = "/var/lib/sbctl";
-  };
-
-  # Enable plymouth (boot animacija)
-  boot.plymouth.enable = true;
 
   # Enable networking
   networking.networkmanager.enable = true;
@@ -252,12 +275,45 @@ in
     LC_TIME = "bs_BA.UTF-8";
   };
 
+  #=========================================================
+  #     Bluetooth
+  #=========================================================
+
+  hardware.bluetooth = {
+    enable = true;
+    powerOnBoot = true;
+    settings = {
+      General = {
+        Experimental = true; # Prikazuje nivo napunjenosti baterije povezanih uređaja.
+        FastConnectable = true; # Brže povezivanje uređaja, ali veća potrošnja energije.
+      };
+      Policy = {
+        AutoEnable = true; # # Omogući sve kontrolere kada se pronađu.
+        ControllerMode = "bredr"; # Popravlja učestale prekide Bluetooth audio zapisa
+      };
+    };
+  };
+
+  ###### Ovo je za popravku učestalih prekida Bluetooth audio zapisa. ######
+  boot.extraModprobeConfig = ''
+    options iwlwifi bt_coex_active=0 # Isključi Bluetooth koegzistenciju radi stabilnijeg BT zvuka
+    options iwlwifi swcrypto=1 # Uključi softversku enkripciju (ponekad pomaže BT koegzistenciji)
+    options iwlwifi power_save=0 # Isključi uštedu energije na Wi-Fi modulu radi manjeg broja promena radio stanja
+    options iwlwifi uapsd_disable=1 # Isključi U-APSD radi poboljšanja Bluetooth audio performansi
+    options iwlwifi d0i3_disable=1 # Isključi D0i3 režim rada radi izbegavanja problematičnih promena napajanja
+    options iwlmvm power_scheme=1 # Podesi šemu napajanja za performanse (iwlmvm)
+  '';
+
+  #=========================================================
+  #     Radno okruženje (Desktop Environment)
+  #=========================================================
+
   # Enable the X11 windowing system.
   # You can disable this if you're only using the Wayland session.
   services.xserver.enable = true;
 
   # Default DE
-  #services.displayManager.defaultSession = "plasma";  # plasma ili cinnamon ili gnome
+  services.displayManager.defaultSession = "plasma";  # plasma ili cinnamon ili gnome
 
   # Enable the GNOME Desktop Environment.
   #services.displayManager.gdm.enable = false;
@@ -266,7 +322,7 @@ in
 
   #Enable Cinnamon
   #services.xserver.desktopManager.cinnamon.enable = true;
-  #services.cinnamon.apps.enable = true;
+  services.cinnamon.apps.enable = true;
 
   # Enable the KDE Plasma Desktop Environment.
   services.displayManager.sddm.enable = true;
@@ -278,13 +334,15 @@ in
     variant = "";
   };
 
-  # Enable CUPS to print documents.
+  #=========================================================
+  #     Enable CUPS to print documents
+  #=========================================================
   services.printing.enable = true;
+  hardware.sane.enable = true; # Enable support for SANE scanners
 
-  # Enable support for SANE scanners
-  hardware.sane.enable = true;
-
-  # Enable sound with pipewire.
+  #=========================================================
+  #     Enable sound with pipewire
+  #=========================================================
   services.pulseaudio.enable = false;
   security.rtkit.enable = true;
   services.pipewire = {
@@ -336,7 +394,10 @@ in
     };
   };
 
-  # Paketi ##########################################################################
+  #=========================================================
+  #     Paketi
+  #=========================================================
+
   # List packages installed in system profile. To search, run:
   # $ nix search wget
   environment.systemPackages = with pkgs; [
@@ -352,8 +413,12 @@ in
     ignition # Startup aplikacija
     inspector # Informacije o sistemu
     libnotify # za notifikacije o automatskom ažuriranju
+    kdePackages.kjournald # system journal management tool
+    kdePackages.spectacle # Screenshot capture utility
+    kdePackages.sweeper
     nix # Nix package manager
     python3Minimal
+    systemdgenie
     vulkan-tools # Vulkan dijagnostika (potrebno za Bottles / Flatpak GPU podršku)
     unzip
     dconf-editor
@@ -377,9 +442,9 @@ in
   ## Razvoj / alati
   ## ======================
     git # Distributed version control system
+    kdePackages.dolphin-plugins
     kdePackages.kcalc # Digitron
     lua # scripting language
-    kdePackages.dolphin-plugins
 
   ## ======================
   ## AppImage / disk alati
@@ -412,15 +477,16 @@ in
   ## ======================
     kdePackages.kmahjongg # Mahjongg Solitaire
     kdePackages.kmines # KMines is the classic Minesweeper game
-    kdePackages.knavalbattle # ship sinking game
     kdePackages.kpat # Solitaire card game
 
   ## ======================
   ## Kancelarija / produktivnost
   ## ======================
+    calibre
     kdePackages.kcharselect # Tool to select and copy special characters
     kdePackages.kompare # Graphical File Differences Tool
     kdePackages.ktouch # Touch Typing Tutor
+    kdePackages.marknote # note taking app
     #libreoffice # private, free and open source office suite
     obsidian # aplikacija za vođenje bilješki
     onlyoffice-desktopeditors # OnlyOffice
@@ -488,8 +554,6 @@ in
   ## ======================
   ## Skripte za dirty 
   ## ======================
-
-  # Skripta za USB mode
   (writeShellScriptBin "usb-mode" ''
     echo 8388608 > /proc/sys/vm/dirty_background_bytes    # 8MB (umesto 20MB)
     echo 16777216 > /proc/sys/vm/dirty_bytes              # 16MB (umesto 50MB)
@@ -498,8 +562,6 @@ in
     echo "📀 USB mode: 8MB/16MB bufferi"
     echo "✅ Tačan progress bar pri kopiranju"
   '')
-
-  # Skripta za video mode
   (writeShellScriptBin "video-mode" ''
     echo 3 > /proc/sys/vm/dirty_background_ratio          # 491MB
     echo 10 > /proc/sys/vm/dirty_ratio                    # 1.6GB
@@ -508,8 +570,6 @@ in
     echo "🎬 Video mode: 3%/10% (491MB/1.6GB)"
     echo "✅ Optimizovano za Kdenlive editing"
   '')
-
-  # Skripta za gaming mode
   (writeShellScriptBin "gaming-mode" ''
     echo 8 > /proc/sys/vm/dirty_background_ratio          # 1.3GB
     echo 20 > /proc/sys/vm/dirty_ratio                    # 3.2GB
@@ -518,19 +578,6 @@ in
     echo "🎮 Gaming mode: 8%/20% (1.3GB/3.2GB)"
     echo "✅ Dobar za gaming + 4K video playback"
   '')
-
-  # Skripta za aggressive mode
-  (writeShellScriptBin "aggressive-mode" ''
-    echo 10 > /proc/sys/vm/dirty_background_ratio          # 1.6GB
-    echo 30 > /proc/sys/vm/dirty_ratio                     # 4.8GB
-    echo 30000 > /proc/sys/vm/dirty_writeback_centisecs    # 300s (5min)
-    echo 60000 > /proc/sys/vm/dirty_expire_centisecs       # 600s (10min)
-    echo "🔥 AGGRESSIVE mode: 10%/30% (1.6GB/4.8GB)"
-    echo "⚠️ UPOZORENJE: Možeš izgubiti do 4.8GB podataka!"
-    echo "Koristi SAMO za renderovanje, ne za editing!"
-  '')
-
-  # Skripta za status
   (writeShellScriptBin "status-mode" ''
     echo ""
     echo "=== DIRTY PAGES STATUS ==="
@@ -548,16 +595,20 @@ in
     echo "usb-mode           dbb8388608 db16777216 wr500 ex3000"
     echo "video-mode         dbr3 dr10 wr6000 ex12000"
     echo "gaming-mode        dbr8 dr20 wr8000 ex16000"
-    echo "aggressive-mode    dbr10 dr30 wr30000 ex60000"
   '')
 
   ];
- 
-  # Deinstalacija pojedinih paketa
+
+  #=========================================================
+  #     Deinstalacija pojedinih paketa
+  #=========================================================
+
   #environment.gnome.excludePackages = with pkgs; [ ];
   services.xserver.excludePackages = with  pkgs; [ xterm ];
 
-  # Firefox ####################################################
+  #=========================================================
+  #     Firefox
+  #=========================================================
 
   programs = {
     firefox = {
@@ -642,7 +693,10 @@ in
     };
   };
 
-  # Za brži KDE ###################################################################################
+  #=========================================================
+  #      Za brži KDE
+  #=========================================================
+
   nixpkgs.overlays = lib.singleton (final: prev: {
     kdePackages = prev.kdePackages // {
       plasma-workspace = let
@@ -692,7 +746,7 @@ in
     };
   });
 
-  #############################################################################################
+  ####################################################################
 
   # Some programs need SUID wrappers, can be configured further or are
   # started in user sessions.
