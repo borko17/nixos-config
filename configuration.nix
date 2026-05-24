@@ -8,7 +8,7 @@
   #     Lanzaboote: Secure Boot za NixOS
   #=========================================================
   let
-    sources = import ./lon/lon.nix;
+    sources = import /etc/nix/lon/lon.nix;
     lanzaboote = import sources.lanzaboote {
       inherit pkgs;
     };
@@ -21,6 +21,7 @@
       lanzaboote.nixosModules.lanzaboote  
     ];
 
+
   #=========================================================
   #     Bootloader
   #=========================================================
@@ -28,7 +29,7 @@
   #boot.loader.efi.canTouchEfiVariables = true;
   boot.loader.systemd-boot = {
   enable = lib.mkForce false;
-  configurationLimit = 3;
+  configurationLimit = 10;
   };
   boot.lanzaboote = {
     enable = true;
@@ -61,70 +62,6 @@
       ];
     }
   ];
-
-  #=========================================================
-  #     Automatsko ažuriranje sistema
-  #=========================================================
-
-  ########## Optimizacija Nix skladišta ##########
-  # Detektuje duplikate fajlova i zamijeni ih čvrstim linkovima (hard links) na jednu kopiju.
-  # Uključiti ako ima malo prostora na disku - štedi prostor, ali su sporije nix store operacije.
-  nix.settings.auto-optimise-store = false;
-
-  ########## Garbage collection ##########
-  nix.gc = {
-    automatic = true;
-    dates = "daily";
-    options = "--delete-older-than 2d";
-  };
-
-  ########## Servis za automatsko ažuriranje ##########
-  systemd.user.services.nixos-upgrade = {
-    enable = true;
-    description = "NixOS Upgrade";
-    after = [ "graphical-session.target" ];
-    serviceConfig = {
-      Type = "oneshot";
-      Environment = [
-        "DISPLAY=:0"
-        "XAUTHORITY=/home/borko/.Xauthority"
-      ];
-      ExecStart = 
-      "${pkgs.kdePackages.konsole}/bin/konsole " +
-      "-e ${pkgs.bash}/bin/bash -c '" +
-      "echo \"╔══════════════════════════════════════════════════╗\"; " +
-      "echo \"║               NIXOS SYSTEM UPDATE                ║\"; " +
-      "echo \"╠══════════════════════════════════════════════════╣\"; " +
-      "echo \"║          Pokrećem ažuriranje sistema...          ║\"; " +
-      "echo \"╚══════════════════════════════════════════════════╝\"; " +
-      "echo \"\"; " +
-      "/run/wrappers/bin/sudo -n /run/current-system/sw/bin/nixos-rebuild switch --upgrade; " +
-      "echo \"\"; " +
-      "echo \"╔══════════════════════════════════════════════════╗\"; " +
-      "echo \"║             ✓ AŽURIRANJE ZAVRŠENO!               ║\"; " +
-      "echo \"╚══════════════════════════════════════════════════╝\"; " +
-      "echo \"\"; " +
-      "echo \"Prozor će se zatvoriti za 3 sekunde...\"; " +
-      "sleep 3" +
-      "'";
-      User = "borko";
-      WorkingDirectory = "/home/borko";
-    };
-  };
-
-  ########## Timer za početak ažuriranja ##########
-  systemd.user.timers.nixos-upgrade = {
-    enable = true;
-    wantedBy = [ "timers.target" ];
-    timerConfig = {
-      #OnCalendar = "*-*-* 12:15:00";
-      OnBootSec = "1min";  # Čekaj 2 minuta nakon boot-a
-      #OnCalendar = "daily"; # Na dnevnom nivou
-      #Persistent = true; # Preskočeni pokreti će se izvršiti pri sledećem bootu
-      #RandomizedDelaySec = "1h"; # Maksimalno kašnjenje (random) npr. 30min, 1h..
-      #FixedRandomDelay = true; # Kašnjenje se randomizuje samo jednom
-    };
-  };
 
   #========================================================= 
   #     Finalne Kernel Postavke za 16GB RAM:
@@ -416,6 +353,8 @@
     kdePackages.kjournald # system journal management tool
     kdePackages.spectacle # Screenshot capture utility
     kdePackages.sweeper
+    kdePackages.kdialog # notifikacije
+    neofetch
     nix # Nix package manager
     python3Minimal
     systemdgenie
@@ -444,7 +383,8 @@
     git # Distributed version control system
     kdePackages.dolphin-plugins
     kdePackages.kcalc # Digitron
-    lua # scripting language
+    lua54Packages.lua
+    nemo
 
   ## ======================
   ## AppImage / disk alati
@@ -490,6 +430,8 @@
     #libreoffice # private, free and open source office suite
     obsidian # aplikacija za vođenje bilješki
     onlyoffice-desktopeditors # OnlyOffice
+    fontforge-gtk python312Packages.fontforge # font editor
+
 
   ## ======================
   ## Skeniranje
@@ -504,7 +446,6 @@
   ## ======================
     kdePackages.kget # Menadžer preuzimanja
     ocs-url # Open Collaboration System for use with DE store websites
-    telegram-desktop # Telegram
     vdhcoapp # Video DownloadHelper
     qbittorrent # BitTorrent client
     wget # preuzimanje fajlova
@@ -512,7 +453,7 @@
   ## ======================
   ## Tema / izgled
   ## ======================
-    capitaine-cursors # Kursor tema
+    #capitaine-cursors # Kursor tema
     #yaru-theme # Tema ikonica
 
   ## ======================
@@ -633,7 +574,7 @@
         OverrideFirstRunPage = "";
         OverridePostUpdatePage = "";
         DontCheckDefaultBrowser = true;
-        DisplayBookmarksToolbar = "never"; # alternatives: "always" or "newtab"
+        DisplayBookmarksToolbar = "always"; # alternatives: "never", "always" or "newtab"
         DisplayMenuBar = "never"; # alternatives: "always", "never" or "default-on"
         SearchBar = "unified"; # alternative: "separate"
 
@@ -693,58 +634,7 @@
     };
   };
 
-  #=========================================================
-  #      Za brži KDE
-  #=========================================================
 
-  nixpkgs.overlays = lib.singleton (final: prev: {
-    kdePackages = prev.kdePackages // {
-      plasma-workspace = let
-
-        # the package we want to override
-        basePkg = prev.kdePackages.plasma-workspace;
-
-        # a helper package that merges all the XDG_DATA_DIRS into a single directory
-        xdgdataPkg = pkgs.stdenv.mkDerivation {
-          name = "${basePkg.name}-xdgdata";
-          buildInputs = [ basePkg ];
-          dontUnpack = true;
-          dontFixup = true;
-          dontWrapQtApps = true;
-          installPhase = ''
-            mkdir -p $out/share
-            ( IFS=:
-              for DIR in $XDG_DATA_DIRS; do
-                if [[ -d "$DIR" ]]; then
-                  cp -r $DIR/. $out/share/
-                  chmod -R u+w $out/share
-                fi
-              done
-            )
-          '';
-        };
-
-        # undo the XDG_DATA_DIRS injection that is usually done in the qt wrapper
-        # script and instead inject the path of the above helper package
-        derivedPkg = basePkg.overrideAttrs {
-          preFixup = ''
-            for index in "''${!qtWrapperArgs[@]}"; do
-              if [[ ''${qtWrapperArgs[$((index+0))]} == "--prefix" ]] && [[ ''${qtWrapperArgs[$((index+1))]} == "XDG_DATA_DIRS" ]]; then
-                unset -v "qtWrapperArgs[$((index+0))]"
-                unset -v "qtWrapperArgs[$((index+1))]"
-                unset -v "qtWrapperArgs[$((index+2))]"
-                unset -v "qtWrapperArgs[$((index+3))]"
-              fi
-            done
-            qtWrapperArgs=("''${qtWrapperArgs[@]}")
-            qtWrapperArgs+=(--prefix XDG_DATA_DIRS : "${xdgdataPkg}/share")
-            qtWrapperArgs+=(--prefix XDG_DATA_DIRS : "$out/share")
-          '';
-        };
-
-      in derivedPkg;
-    };
-  });
 
   ####################################################################
 
@@ -759,7 +649,7 @@
   # List services that you want to enable:
 
   # Enable the OpenSSH daemon.
-  # services.openssh.enable = true;
+    services.openssh.enable = true;
 
   # Open ports in the firewall.
     networking.firewall.allowedTCPPorts = [ 
